@@ -44,43 +44,58 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
                 item.button?.title = "HB-T"
             }
         }
-        for second in 1...7 {
-            later(Double(second)) {
-                let fields = Mirror(reflecting: self.controller!).children.filter { ($0.label ?? "").hasPrefix("modern") }
-                print("state=\(fields.map { "\($0.label!):\($0.value)" }) length=\(self.separator.length)")
-                fflush(stdout)
-            }
-        }
-        later(8) {
+        // Calibration settles asynchronously, especially with two separators.
+        // Wait for completion with a deadline instead of sampling an in-flight probe.
+        later(1.5) { self.whenSettled {
             self.check(self.separator.length > 20 && self.separator.length < 1000, "initial calibrated collapse")
             self.arrow.button?.performClick(nil)
             self.check(self.separator.length == 20, "button activation without mouse-up expands")
             self.check(self.arrow.button?.toolTip == "Hide icons".localized, "expanded action description")
-        }
-        later(8.5) { NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil) }
-        later(9) { self.controller.expandCollapseIfNeeded() }
-        later(10) { self.controller.expandCollapseIfNeeded() }
-        later(12) {
-            self.check(self.separator.length == 20, "expand cancels pending calibration")
-            self.controller.expandCollapseIfNeeded()
-        }
-        later(19) {
-            self.check(self.separator.length > 20 && self.separator.length < 1000, "recollapse succeeds")
-            self.controller.expandCollapseIfNeeded()
-        }
-        later(20) {
-            self.check(self.separator.length == 20, "final expand")
-            if CommandLine.arguments.contains("--always-hidden") {
-                let property = Mirror(reflecting: self.controller!).children.first { $0.label == "btnAlwaysHidden" }
-                let item = property?.value as? NSStatusItem
-                self.check((item?.length ?? 0) > 20, "always-hidden remains inflated on ordinary expand")
+            self.later(0.5) {
+                NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+                self.later(0.5) {
+                    self.controller.expandCollapseIfNeeded()
+                    self.later(1) {
+                        self.controller.expandCollapseIfNeeded()
+                        self.later(2) {
+                            self.check(self.separator.length == 20, "expand cancels pending calibration")
+                            self.controller.expandCollapseIfNeeded()
+                            self.whenSettled {
+                                self.check(self.separator.length > 20 && self.separator.length < 1000, "recollapse succeeds")
+                                self.controller.expandCollapseIfNeeded()
+                                self.whenSettled { self.finish() }
+                            }
+                        }
+                    }
+                }
             }
-            print("Integration completed: \(self.failures) failures")
-            fflush(stdout)
-            if !CommandLine.arguments.contains("--hold") { exit(self.failures == 0 ? 0 : 1) }
-        }
+        } }
         // Even interactive inspection always cleans up its own status items.
         later(180) { NSApp.terminate(nil) }
+    }
+
+    func whenSettled(deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 30,
+                     _ action: @escaping () -> Void) {
+        let busy = Mirror(reflecting: controller!).children.first { $0.label == "modernLayoutBusy" }?.value as? Bool
+        guard let busy = busy else { fatalError("Missing controller calibration state") }
+        if !busy { action(); return }
+        if ProcessInfo.processInfo.systemUptime >= deadline {
+            check(false, "calibration settled within 30 seconds")
+            exit(1)
+        }
+        later(0.2) { self.whenSettled(deadline: deadline, action) }
+    }
+
+    func finish() {
+        check(separator.length == 20, "final expand")
+        if CommandLine.arguments.contains("--always-hidden") {
+            let property = Mirror(reflecting: controller!).children.first { $0.label == "btnAlwaysHidden" }
+            let item = property?.value as? NSStatusItem
+            check((item?.length ?? 0) > 20, "always-hidden remains inflated on ordinary expand")
+        }
+        print("Integration completed: \(failures) failures")
+        fflush(stdout)
+        if !CommandLine.arguments.contains("--hold") { exit(failures == 0 ? 0 : 1) }
     }
 
     func later(_ delay: TimeInterval, _ action: @escaping () -> Void) {

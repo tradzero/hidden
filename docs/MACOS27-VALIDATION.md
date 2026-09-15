@@ -125,3 +125,8 @@ pre-merge requirement; this fork has not been submitted or merged upstream.
   windowless harness timed out. Full visual disappearance/restoration of other
   apps' icons across both displays remains unverified. Accessible labels alone
   do not prove that those icons were hidden.
+- Follow-up regression results: 9 deterministic calibrator tests passed; the
+  ordinary controller run passed 6 assertions and always-hidden passed 7. The
+  old fixed-second harness produced a premature recollapse failure while the
+  two-stage calibration was still running. The harness now waits for idle with
+  a 30-second deadline and fails explicitly on timeout; both modes passed.
