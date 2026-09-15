@@ -15,9 +15,43 @@ class StatusBarController {
     
     //MARK: - BarItems
         
-    private let btnExpandCollapse = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let btnSeparate = NSStatusBar.system.statusItem(withLength: 1)
-    private var btnAlwaysHidden:NSStatusItem? = nil
+    // Register fresh names in order: separator, spacers, arrow (left to right).
+    // macOS 27 owns saved positions; new spacers cannot be inserted into an old group.
+    private let btnExpandCollapse = StatusBarController.makeItem("hiddenbar_expandcollapse", length: NSStatusItem.variableLength)
+    private let ordinarySpacers = StatusBarController.makeSpacers("ordinary")
+    private let btnSeparate = StatusBarController.makeItem("hiddenbar_separate", length: 1)
+    private let alwaysSpacers = StatusBarController.makeSpacers("always")
+    private var btnAlwaysHidden: NSStatusItem? = StatusBarController.makeAlwaysItem()
+
+    private static func makeItem(_ name: String, length: CGFloat) -> NSStatusItem {
+        let item = NSStatusBar.system.statusItem(withLength: length)
+        if #available(macOS 27.0, *) { item.autosaveName = name + "_wide_v1" }
+        return item
+    }
+
+    private static func makeSpacers(_ section: String) -> [NSStatusItem] {
+        guard #available(macOS 27.0, *) else { return [] }
+        // Keep the count/names fixed across launches, even when the section is disabled.
+        return (0..<6).map { index in
+            let item = makeItem("hiddenbar_\(section)_spacer\(index)", length: 0)
+            item.button?.isEnabled = false
+            return item
+        }
+    }
+
+    private static func makeAlwaysItem() -> NSStatusItem? {
+        guard #available(macOS 27.0, *) else { return nil }
+        return makeItem("hiddenbar_terminate", length: 0)
+    }
+
+    private func setSpacers(_ spacers: [NSStatusItem], length: CGFloat?) {
+        for item in spacers {
+            // Hide first when expanding; zero length alone can leave inter-item gaps.
+            if length == nil { item.isVisible = false }
+            if length != nil { item.isVisible = true }
+            item.length = length ?? 0
+        }
+    }
     
     private var btnHiddenLength: CGFloat = 20
     private var btnHiddenCollapseLength: CGFloat = 2000
@@ -74,8 +108,6 @@ class StatusBarController {
     private var layoutGeneration = 0
     private var ordinaryCachedLength: CGFloat?
     private var alwaysCachedLength: CGFloat?
-    private var ordinaryAppliedGeometry: CollapseLengthCalibrator.Geometry?
-    private var alwaysAppliedGeometry: CollapseLengthCalibrator.Geometry?
     private var ordinaryCalibration: CollapseLengthCalibrator?
     private var alwaysCalibration: CollapseLengthCalibrator?
 
@@ -220,8 +252,10 @@ class StatusBarController {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         
-        btnExpandCollapse.autosaveName = "hiddenbar_expandcollapse";
-        btnSeparate.autosaveName = "hiddenbar_separate";
+        if !usesCalibratedCollapse {
+            btnExpandCollapse.autosaveName = "hiddenbar_expandcollapse"
+            btnSeparate.autosaveName = "hiddenbar_separate"
+        }
     }
     
     @objc func btnExpandCollapsePressed(sender: NSStatusBarButton) {
@@ -337,7 +371,9 @@ class StatusBarController {
     @objc private func modernEnvironmentChanged(_ notification: Notification) {
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
            app.processIdentifier == ProcessInfo.processInfo.processIdentifier { return }
-        scheduleModernRecalibration(invalidateCache: notification.name == NSWorkspace.didWakeNotification)
+        // A pinned separator edge does not prove that icons remain hidden:
+        // a shorter foreground menu can reveal icons without moving that edge.
+        scheduleModernRecalibration()
     }
 
     private func cancelModernCalibration() {
@@ -347,47 +383,17 @@ class StatusBarController {
         modernLayoutBusy = false
     }
 
-    private func scheduleModernRecalibration(invalidateCache: Bool = true) {
+    private func scheduleModernRecalibration() {
         cancelModernCalibration()
         timer?.invalidate()
         modernLayoutBusy = true
-        if invalidateCache {
-            ordinaryCachedLength = nil
-            alwaysCachedLength = nil
-            ordinaryAppliedGeometry = nil
-            alwaysAppliedGeometry = nil
-        }
+        ordinaryCachedLength = nil
+        alwaysCachedLength = nil
         let token = layoutGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self = self, self.layoutGeneration == token else { return }
-            // App switching should not expand a still-working separator on every
-            // activation. Recheck its pinned edge first; only recalibrate on failure.
-            if !invalidateCache && self.currentModernLayoutIsApplied() {
-                self.modernLayoutBusy = false
-                self.autoCollapseIfNeeded()
-                return
-            }
             self.applyModernLayout(collapsed: self.modernCollapsed)
         }
-    }
-
-    private func matchesAppliedGeometry(_ current: CollapseLengthCalibrator.Geometry?,
-                                        _ applied: CollapseLengthCalibrator.Geometry?) -> Bool {
-        guard let current = current, let applied = applied else { return false }
-        return current.context == applied.context && abs(current.offset - applied.offset) <= 24
-    }
-
-    private func currentModernLayoutIsApplied() -> Bool {
-        if modernLayoutFailed { return false }
-        if modernCollapsed {
-            return ordinaryCachedLength == btnSeparate.length && matchesAppliedGeometry(
-                geometry(of: btnSeparate, anchoredTo: btnExpandCollapse), ordinaryAppliedGeometry)
-        }
-        if Preferences.areSeparatorsHidden, let item = btnAlwaysHidden {
-            return alwaysCachedLength == item.length && matchesAppliedGeometry(
-                geometry(of: item, anchoredTo: btnSeparate), alwaysAppliedGeometry)
-        }
-        return true
     }
 
     private func geometry(of item: NSStatusItem, anchoredTo anchor: NSStatusItem) -> CollapseLengthCalibrator.Geometry? {
@@ -445,6 +451,7 @@ class StatusBarController {
         modernLayoutBusy = true
         modernLayoutFailed = false
         let token = layoutGeneration
+        setSpacers(ordinarySpacers, length: nil)
         btnSeparate.length = btnHiddenLength
         updateModernAppearance()
 
@@ -452,27 +459,23 @@ class StatusBarController {
         // expanded. Its available space is different, so never borrow the other value.
         if Preferences.alwaysHiddenSectionEnabled && Preferences.areSeparatorsHidden,
            let item = btnAlwaysHidden {
-            if alwaysCachedLength == item.length, alwaysAppliedGeometry != nil {
-                // Let the ordinary separator return to its expanded slot, then
-                // verify the retained always-hidden span without revealing it first.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
-                    guard let self = self, self.layoutGeneration == token else { return }
-                    if self.matchesAppliedGeometry(self.geometry(of: item, anchoredTo: self.btnSeparate), self.alwaysAppliedGeometry) {
-                        self.applyModernOrdinarySection(token: token)
-                    } else {
-                        self.calibrateAlwaysHidden(item, token: token)
-                    }
-                }
+            if let length = alwaysCachedLength, length == item.length,
+               alwaysSpacers.allSatisfy({ $0.isVisible && $0.length == length }) {
+                // Keep the established always-hidden block during an ordinary toggle.
+                // App/display changes explicitly invalidate this cache.
+                applyModernOrdinarySection(token: token)
             } else {
                 calibrateAlwaysHidden(item, token: token)
             }
         } else {
+            setSpacers(alwaysSpacers, length: nil)
             btnAlwaysHidden?.length = btnAlwaysHiddenLength
             applyModernOrdinarySection(token: token)
         }
     }
 
     private func calibrateAlwaysHidden(_ item: NSStatusItem, token: Int) {
+        setSpacers(alwaysSpacers, length: nil)
         let calibration = makeCalibration(for: item, anchor: btnSeparate)
         alwaysCalibration = calibration
         calibration.start(expanded: btnAlwaysHiddenLength, upperBound: btnHiddenCollapseLength,
@@ -480,11 +483,10 @@ class StatusBarController {
             guard let self = self, self.layoutGeneration == token else { return }
             if case .applied(let length) = result {
                 self.alwaysCachedLength = length
-                self.alwaysAppliedGeometry = self.geometry(of: item, anchoredTo: self.btnSeparate)
+                self.setSpacers(self.alwaysSpacers, length: length)
                 NSLog("CollapseCalibration: always-hidden applied \(length)pt")
             } else {
                 self.alwaysCachedLength = nil
-                self.alwaysAppliedGeometry = nil
                 item.length = self.btnAlwaysHiddenLength
                 self.modernLayoutFailed = true
             }
@@ -508,11 +510,10 @@ class StatusBarController {
             self.modernLayoutBusy = false
             if case .applied(let length) = result {
                 self.ordinaryCachedLength = length
-                self.ordinaryAppliedGeometry = self.geometry(of: self.btnSeparate, anchoredTo: self.btnExpandCollapse)
+                self.setSpacers(self.ordinarySpacers, length: length)
                 NSLog("CollapseCalibration: ordinary applied \(length)pt")
             } else {
                 self.ordinaryCachedLength = nil
-                self.ordinaryAppliedGeometry = nil
                 self.btnSeparate.length = self.btnHiddenLength
                 self.modernCollapsed = false
                 self.modernLayoutFailed = true
@@ -597,7 +598,15 @@ extension StatusBarController {
         if usesCalibratedCollapse { cancelModernCalibration() }
         updateCollapsedLengths()
 
-        if Preferences.alwaysHiddenSectionEnabled {
+        if usesCalibratedCollapse {
+            // Retain the registered slot while disabled, including across launches.
+            btnAlwaysHidden?.isVisible = Preferences.alwaysHiddenSectionEnabled
+            if let button = btnAlwaysHidden?.button {
+                if button.image !== imgIconLine { button.image = imgIconLine }
+                button.appearsDisabled = true
+            }
+            setSpacers(alwaysSpacers, length: nil)
+        } else if Preferences.alwaysHiddenSectionEnabled {
             if let existing = self.btnAlwaysHidden {
                 NSStatusBar.system.removeStatusItem(existing)
             }
@@ -617,8 +626,6 @@ extension StatusBarController {
         if usesCalibratedCollapse {
             alwaysCachedLength = nil
             ordinaryCachedLength = nil
-            alwaysAppliedGeometry = nil
-            ordinaryAppliedGeometry = nil
             applyModernLayout(collapsed: modernCollapsed)
         }
     }

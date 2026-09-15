@@ -12,10 +12,14 @@ are bounded, cancellable and discarded when a newer layout request supersedes
 them. A failed search restores the ordinary section to expanded and exposes a
 notice in the context menu. A subsequent user toggle can retry.
 
-Lengths are revalidated on reuse. Display changes/wake clear the cache. Frontmost
-application changes first check whether the existing geometry still works to
-avoid expanding the bar unnecessarily. The always-hidden separator has its own
-calibration and retains a working span when the ordinary section expands.
+Lengths are revalidated on reuse. Display changes, wake and frontmost application
+changes clear the cache. A pinned separator edge is not sufficient to reuse a
+span after the foreground menu changes. Each section now has six additional
+spacers, each using its separator's calibrated length. Their combined width pushes
+icons past short application menus without asking one item for an oversized span.
+Spacers are invisible and zero-length when their section is expanded/disabled.
+The always-hidden section has its own calibration and spacer group, retained
+when the ordinary section expands.
 Changing bar contents without an application/display event is rechecked on the
 next toggle; this patch does not continuously poll other applications.
 
@@ -38,8 +42,27 @@ proves that another application's icons have actually disappeared:
 The pinned-edge classifier and its 24pt padding tolerance remain empirical.
 An accepted span does **not** prove full hiding on every display. Mixed-width
 displays, notched displays, RTL, fullscreen transitions, physical hot-plug and
-sleep/wake still need hardware acceptance. This patch does not implement the
-multiple-spacer migration proposed in upstream PR #392.
+sleep/wake still need hardware acceptance. The multi-spacer approach is informed
+by [upstream PR #392](https://github.com/dwarvesf/hidden/pull/392), with calibrated
+rather than fixed per-item lengths and independent always-hidden spacers.
+Six spacers per section is a fixed registration budget; this is not a guarantee
+for arbitrarily disparate display sizes or every macOS 27 layout.
+
+## One-time layout migration for the multi-spacer build
+
+macOS 27 owns status-item placement. To register spacers between the arrow and
+separator, this version uses new `_wide_v1` autosave names, registered in a fixed
+order. Older versions' names are untouched for rollback. The always-hidden slots
+are registered even when disabled, then hidden, so enabling that section does not
+create a misplaced group at the left edge.
+
+On the first launch, expand using Hidden Bar's single arrow, then hold Command
+and drag the icons to hide to the **left of its separator**. Keep always-visible
+icons to the right of the arrow. If using always-hidden, place those icons to
+the left of the additional separator. Do not drag icons between a separator and
+its arrow; that space belongs to the hidden spacers. This grouping is a one-time
+setup and is retained on subsequent launches. The system double-chevron is
+unchanged. Unused spacer items have no glyph and take no space on expansion.
 
 ## Validation on 2026-09-15
 
@@ -130,3 +153,31 @@ pre-merge requirement; this fork has not been submitted or merged upstream.
   old fixed-second harness produced a premature recollapse failure while the
   two-stage calibration was still running. The harness now waits for idle with
   a 30-second deadline and fails explicitly on timeout; both modes passed.
+
+## Short-menu residual icons follow-up (2026-09-15)
+
+The user reproduced residual icons in Telegram without clicking either arrow;
+Chrome's longer menu hid them. A trial that invalidated the cache on application
+activation still leaked icons, so cache invalidation alone is not the fix.
+The final change adds the spacer groups described above as well as invalidation.
+
+In the isolated production-controller harness, two independent-process status
+items (`HB-A`, `HB-B`) were visible in MenuBarAgent's accessibility tree when
+expanded. UI-tool clicks produced this sequence:
+
+1. Click `HB-A`: its title became `HB-A!` and its process logged the action.
+2. Click the controller's status button to collapse: both decoy items were absent
+   from a fresh full MenuBarAgent tree; the controller offered `Show hidden icons`.
+3. Click to expand: both decoys reappeared; clicking `HB-A!` restored `HB-A` and
+   logged a second action in the independent process.
+
+This verifies disappearance/restoration and live input through the system menu
+bar, beyond checking the controller's own arrow or a reported window width. It
+is not an all-displays screenshot test; no raw desktop/AX captures are committed.
+The complete local application also compiles against the installed macOS 27 SDK,
+using the locked HotKey revision and previously CI-compiled storyboard/assets.
+
+Final focused results: 9 calibrator unit tests, 13 ordinary-controller assertions,
+and 19 always-hidden-controller assertions passed. Controller coverage includes
+fresh calibration after activation, cancellation, expanded intent, spacer cleanup,
+and preserving the always-hidden slots across disable/re-enable.
