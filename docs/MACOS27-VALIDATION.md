@@ -103,3 +103,25 @@ software. To smoke-test without login-item migration or first-launch preferences
 
 Upstream's review-team requirement for core geometry/state changes remains a
 pre-merge requirement; this fork has not been submitted or merged upstream.
+
+## Menu bar icon and accessibility follow-up (2026-09-15)
+
+- Replaced the old heavy bitmap arrows with cached 12pt medium-weight SF Symbol
+  single chevrons on macOS 11+, retaining the bitmap fallback on older systems.
+  Template rendering follows system appearance; direction still follows LTR/RTL.
+- Added localized action tooltips and accessibility labels (English, Simplified
+  and Traditional Chinese). No double-chevron or extra status item was added.
+- Fixed the existing button action ignoring non-mouse activation. Accessibility
+  activation now performs the primary expand/collapse action; mouse right-click
+  and Option-click retain their context-menu/separator actions.
+- The controller harness now exercises `performClick(nil)` and checks the action
+  description after expansion, in addition to cancellation and recalibration.
+- Using the UI automation tool on the macOS 27 graphical session, clicking the
+  actual harness status button changed its accessible description from `Hide
+  icons` to `Show hidden icons`; clicking again restored `Hide icons`. This failed
+  before the non-mouse action fix. The harness uses the production controller.
+- The tool could read the full trial app's preferences window. Its menu-bar
+  screenshot still omitted most status icons, and direct selection of the
+  windowless harness timed out. Full visual disappearance/restoration of other
+  apps' icons across both displays remains unverified. Accessible labels alone
+  do not prove that those icons were hidden.

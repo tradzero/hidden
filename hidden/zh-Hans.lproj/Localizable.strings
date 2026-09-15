@@ -25,3 +25,6 @@
 ";
 
 "Hiding unavailable in the current layout" = "当前布局暂时无法隐藏图标";
+
+"Show hidden icons" = "展开隐藏的图标";
+"Hide icons" = "收起图标";

@@ -14,6 +14,7 @@ enum Util {
 final class ControllerIntegration: NSObject, NSApplicationDelegate {
     var controller: StatusBarController!
     var separator: NSStatusItem!
+    var arrow: NSStatusItem!
     var failures = 0
 
     static func main() {
@@ -39,6 +40,7 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
         for property in Mirror(reflecting: controller!).children {
             if property.label == "btnSeparate" { separator = property.value as? NSStatusItem }
             if property.label == "btnExpandCollapse", let item = property.value as? NSStatusItem {
+                arrow = item
                 item.button?.title = "HB-T"
             }
         }
@@ -51,8 +53,9 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
         }
         later(8) {
             self.check(self.separator.length > 20 && self.separator.length < 1000, "initial calibrated collapse")
-            self.controller.expandCollapseIfNeeded()
-            self.check(self.separator.length == 20, "expand restores width")
+            self.arrow.button?.performClick(nil)
+            self.check(self.separator.length == 20, "button activation without mouse-up expands")
+            self.check(self.arrow.button?.toolTip == "Hide icons".localized, "expanded action description")
         }
         later(8.5) { NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil) }
         later(9) { self.controller.expandCollapseIfNeeded() }

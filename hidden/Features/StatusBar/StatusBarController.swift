@@ -213,6 +213,7 @@ class StatusBarController {
         
         if let button = btnExpandCollapse.button {
             button.image = Assets.collapseImage
+            updateArrowDescription(collapsed: false)
             button.target = self
             
             button.action = #selector(self.btnExpandCollapsePressed(sender:))
@@ -224,21 +225,18 @@ class StatusBarController {
     }
     
     @objc func btnExpandCollapsePressed(sender: NSStatusBarButton) {
-        if let event = NSApp.currentEvent {
-
-            let isOptionKeyPressed = event.modifierFlags.contains(NSEvent.ModifierFlags.option)
-
-            if event.type == NSEvent.EventType.leftMouseUp && !isOptionKeyPressed{
-                self.expandCollapseIfNeeded()
-            } else if event.type == NSEvent.EventType.rightMouseUp && !isOptionKeyPressed {
-                // Right-click opens the same context menu the separator has (#356),
-                // making settings reachable from the control everyone clicks.
-                // The separators/always-hidden toggle stays on option-click.
-                showContextMenu(from: sender)
-            } else {
-                // Both option+left and option+right land here: separators toggle.
-                self.showHideSeparatorsAndAlwayHideArea()
-            }
+        // Accessibility and keyboard activation need not have a mouse-up event.
+        guard let event = NSApp.currentEvent,
+              event.type == .leftMouseUp || event.type == .rightMouseUp else {
+            expandCollapseIfNeeded()
+            return
+        }
+        if event.modifierFlags.contains(.option) {
+            showHideSeparatorsAndAlwayHideArea()
+        } else if event.type == .rightMouseUp {
+            showContextMenu(from: sender)
+        } else {
+            expandCollapseIfNeeded()
         }
     }
 
@@ -301,6 +299,7 @@ class StatusBarController {
         btnSeparate.length = self.btnHiddenCollapseLength
         if let button = btnExpandCollapse.button {
             button.image = Assets.expandImage
+            updateArrowDescription(collapsed: true)
         }
         if Preferences.useFullStatusBarOnExpandEnabled {
             NSApp.setActivationPolicy(.accessory)
@@ -316,6 +315,7 @@ class StatusBarController {
         btnSeparate.length = btnHiddenLength
         if let button = btnExpandCollapse.button {
             button.image = Assets.collapseImage
+            updateArrowDescription(collapsed: false)
         }
         autoCollapseIfNeeded()
         
@@ -409,6 +409,12 @@ class StatusBarController {
         }, write: { [weak item] length in item?.length = length })
     }
 
+    private func updateArrowDescription(collapsed: Bool) {
+        let description = (collapsed ? "Show hidden icons" : "Hide icons").localized
+        btnExpandCollapse.button?.toolTip = description
+        btnExpandCollapse.button?.setAccessibilityLabel(description)
+    }
+
     private func updateModernAppearance() {
         // AppKit 27 can reset length when the image is assigned, even to the same
         // value. Do not invalidate a successful probe while refreshing the arrow.
@@ -416,6 +422,7 @@ class StatusBarController {
         if btnSeparate.button?.image !== separatorImage { btnSeparate.button?.image = separatorImage }
         let alwaysImage = Preferences.areSeparatorsHidden ? nil : imgIconLine
         if btnAlwaysHidden?.button?.image !== alwaysImage { btnAlwaysHidden?.button?.image = alwaysImage }
+        updateArrowDescription(collapsed: modernCollapsed)
         let arrowImage = modernCollapsed ? Assets.expandImage : Assets.collapseImage
         if btnExpandCollapse.button?.image !== arrowImage { btnExpandCollapse.button?.image = arrowImage }
         if Preferences.useFullStatusBarOnExpandEnabled {
