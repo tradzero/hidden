@@ -1,0 +1,27 @@
+name: Build and calibration tests
+on:
+  push:
+    branches: ['bugfix/macos27-calibrated-collapse']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: xcodebuild -version
+      - name: Calibration regression tests
+        run: bash scripts/test-calibration.sh
+      - name: Build complete app
+        run: >-
+          xcodebuild -project 'Hidden Bar.xcodeproj' -scheme 'Hidden Bar'
+          -configuration Debug -derivedDataPath build/DerivedData
+          CODE_SIGNING_ALLOWED=NO PRODUCT_BUNDLE_IDENTIFIER=com.tradzero.hidden.macos27trial build
+      - name: Package unsigned development app
+        run: ditto -c -k --keepParent 'build/DerivedData/Build/Products/Debug/Hidden Bar.app' build/Hidden-Bar-macOS27.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hidden-Bar-macOS27-development
+          path: build/Hidden-Bar-macOS27.zip
