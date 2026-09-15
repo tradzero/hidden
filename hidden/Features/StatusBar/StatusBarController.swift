@@ -74,6 +74,8 @@ class StatusBarController {
     private var layoutGeneration = 0
     private var ordinaryCachedLength: CGFloat?
     private var alwaysCachedLength: CGFloat?
+    private var ordinaryAppliedGeometry: CollapseLengthCalibrator.Geometry?
+    private var alwaysAppliedGeometry: CollapseLengthCalibrator.Geometry?
     private var ordinaryCalibration: CollapseLengthCalibrator?
     private var alwaysCalibration: CollapseLengthCalibrator?
 
@@ -185,8 +187,8 @@ class StatusBarController {
         // sizing from a narrower screen leaks hidden icons on wider displays.
         // frame.width, not visibleFrame: the menubar spans the full frame width.
         let screenWidth = NSScreen.screens.map { $0.frame.width }.max() ?? 1728
-        // Keep collapse length bounded to avoid pathological layout/memory behavior;
-        // macOS enforces a hard 10,000pt maximum on NSStatusItem.length (PR #354).
+        // Preserve the historical bounded request on older systems (PR #354).
+        // On macOS 27 this is only the search ceiling, not a claimed layout limit.
         let boundedCollapseLength = max(500, min(screenWidth * 2, 10_000))
         btnHiddenCollapseLength = boundedCollapseLength
         btnAlwaysHiddenEnableExpandCollapseLength = Preferences.alwaysHiddenSectionEnabled ? boundedCollapseLength : 0
@@ -335,7 +337,7 @@ class StatusBarController {
     @objc private func modernEnvironmentChanged(_ notification: Notification) {
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
            app.processIdentifier == ProcessInfo.processInfo.processIdentifier { return }
-        scheduleModernRecalibration()
+        scheduleModernRecalibration(invalidateCache: notification.name == NSWorkspace.didWakeNotification)
     }
 
     private func cancelModernCalibration() {
@@ -345,19 +347,52 @@ class StatusBarController {
         modernLayoutBusy = false
     }
 
-    private func scheduleModernRecalibration() {
+    private func scheduleModernRecalibration(invalidateCache: Bool = true) {
         cancelModernCalibration()
-        ordinaryCachedLength = nil
-        alwaysCachedLength = nil
+        timer?.invalidate()
+        modernLayoutBusy = true
+        if invalidateCache {
+            ordinaryCachedLength = nil
+            alwaysCachedLength = nil
+            ordinaryAppliedGeometry = nil
+            alwaysAppliedGeometry = nil
+        }
         let token = layoutGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self = self, self.layoutGeneration == token else { return }
+            // App switching should not expand a still-working separator on every
+            // activation. Recheck its pinned edge first; only recalibrate on failure.
+            if !invalidateCache && self.currentModernLayoutIsApplied() {
+                self.modernLayoutBusy = false
+                self.autoCollapseIfNeeded()
+                return
+            }
             self.applyModernLayout(collapsed: self.modernCollapsed)
         }
     }
 
+    private func matchesAppliedGeometry(_ current: CollapseLengthCalibrator.Geometry?,
+                                        _ applied: CollapseLengthCalibrator.Geometry?) -> Bool {
+        guard let current = current, let applied = applied else { return false }
+        return current.context == applied.context && abs(current.offset - applied.offset) <= 24
+    }
+
+    private func currentModernLayoutIsApplied() -> Bool {
+        if modernLayoutFailed { return false }
+        if modernCollapsed {
+            return ordinaryCachedLength == btnSeparate.length && matchesAppliedGeometry(
+                geometry(of: btnSeparate, anchoredTo: btnExpandCollapse), ordinaryAppliedGeometry)
+        }
+        if Preferences.areSeparatorsHidden, let item = btnAlwaysHidden {
+            return alwaysCachedLength == item.length && matchesAppliedGeometry(
+                geometry(of: item, anchoredTo: btnSeparate), alwaysAppliedGeometry)
+        }
+        return true
+    }
+
     private func geometry(of item: NSStatusItem, anchoredTo anchor: NSStatusItem) -> CollapseLengthCalibrator.Geometry? {
-        guard let frame = item.button?.window?.frame,
+        guard !NSScreen.screens.isEmpty,
+              let frame = item.button?.window?.frame,
               let anchorFrame = anchor.button?.window?.frame,
               frame.width > 0, anchorFrame.width > 0 else { return nil }
         let ltr = Constant.isUsingLTRLanguage
@@ -375,9 +410,14 @@ class StatusBarController {
     }
 
     private func updateModernAppearance() {
-        btnSeparate.button?.image = modernCollapsed ? nil : imgIconLine
-        btnAlwaysHidden?.button?.image = Preferences.areSeparatorsHidden ? nil : imgIconLine
-        btnExpandCollapse.button?.image = modernCollapsed ? Assets.expandImage : Assets.collapseImage
+        // AppKit 27 can reset length when the image is assigned, even to the same
+        // value. Do not invalidate a successful probe while refreshing the arrow.
+        let separatorImage = modernCollapsed ? nil : imgIconLine
+        if btnSeparate.button?.image !== separatorImage { btnSeparate.button?.image = separatorImage }
+        let alwaysImage = Preferences.areSeparatorsHidden ? nil : imgIconLine
+        if btnAlwaysHidden?.button?.image !== alwaysImage { btnAlwaysHidden?.button?.image = alwaysImage }
+        let arrowImage = modernCollapsed ? Assets.expandImage : Assets.collapseImage
+        if btnExpandCollapse.button?.image !== arrowImage { btnExpandCollapse.button?.image = arrowImage }
         if Preferences.useFullStatusBarOnExpandEnabled {
             let policy: NSApplication.ActivationPolicy = modernCollapsed ? .accessory : .regular
             if NSApp.activationPolicy() != policy {
@@ -399,30 +439,49 @@ class StatusBarController {
         modernLayoutFailed = false
         let token = layoutGeneration
         btnSeparate.length = btnHiddenLength
-        btnAlwaysHidden?.length = btnAlwaysHiddenLength
         updateModernAppearance()
 
         // Calibrate the always-hidden item independently with the ordinary section
         // expanded. Its available space is different, so never borrow the other value.
         if Preferences.alwaysHiddenSectionEnabled && Preferences.areSeparatorsHidden,
            let item = btnAlwaysHidden {
-            let calibration = makeCalibration(for: item, anchor: btnSeparate)
-            alwaysCalibration = calibration
-            calibration.start(expanded: btnAlwaysHiddenLength, upperBound: btnHiddenCollapseLength,
-                              cached: alwaysCachedLength) { [weak self] result in
-                guard let self = self, self.layoutGeneration == token else { return }
-                if case .applied(let length) = result {
-                    self.alwaysCachedLength = length
-                    NSLog("CollapseCalibration: always-hidden applied \(length)pt")
-                } else {
-                    self.alwaysCachedLength = nil
-                    item.length = self.btnAlwaysHiddenLength
-                    self.modernLayoutFailed = true
+            if alwaysCachedLength == item.length, alwaysAppliedGeometry != nil {
+                // Let the ordinary separator return to its expanded slot, then
+                // verify the retained always-hidden span without revealing it first.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
+                    guard let self = self, self.layoutGeneration == token else { return }
+                    if self.matchesAppliedGeometry(self.geometry(of: item, anchoredTo: self.btnSeparate), self.alwaysAppliedGeometry) {
+                        self.applyModernOrdinarySection(token: token)
+                    } else {
+                        self.calibrateAlwaysHidden(item, token: token)
+                    }
                 }
-                self.applyModernOrdinarySection(token: token)
+            } else {
+                calibrateAlwaysHidden(item, token: token)
             }
         } else {
+            btnAlwaysHidden?.length = btnAlwaysHiddenLength
             applyModernOrdinarySection(token: token)
+        }
+    }
+
+    private func calibrateAlwaysHidden(_ item: NSStatusItem, token: Int) {
+        let calibration = makeCalibration(for: item, anchor: btnSeparate)
+        alwaysCalibration = calibration
+        calibration.start(expanded: btnAlwaysHiddenLength, upperBound: btnHiddenCollapseLength,
+                          cached: alwaysCachedLength) { [weak self] result in
+            guard let self = self, self.layoutGeneration == token else { return }
+            if case .applied(let length) = result {
+                self.alwaysCachedLength = length
+                self.alwaysAppliedGeometry = self.geometry(of: item, anchoredTo: self.btnSeparate)
+                NSLog("CollapseCalibration: always-hidden applied \(length)pt")
+            } else {
+                self.alwaysCachedLength = nil
+                self.alwaysAppliedGeometry = nil
+                item.length = self.btnAlwaysHiddenLength
+                self.modernLayoutFailed = true
+            }
+            self.applyModernOrdinarySection(token: token)
         }
     }
 
@@ -442,9 +501,11 @@ class StatusBarController {
             self.modernLayoutBusy = false
             if case .applied(let length) = result {
                 self.ordinaryCachedLength = length
+                self.ordinaryAppliedGeometry = self.geometry(of: self.btnSeparate, anchoredTo: self.btnExpandCollapse)
                 NSLog("CollapseCalibration: ordinary applied \(length)pt")
             } else {
                 self.ordinaryCachedLength = nil
+                self.ordinaryAppliedGeometry = nil
                 self.btnSeparate.length = self.btnHiddenLength
                 self.modernCollapsed = false
                 self.modernLayoutFailed = true
@@ -549,6 +610,8 @@ extension StatusBarController {
         if usesCalibratedCollapse {
             alwaysCachedLength = nil
             ordinaryCachedLength = nil
+            alwaysAppliedGeometry = nil
+            ordinaryAppliedGeometry = nil
             applyModernLayout(collapsed: modernCollapsed)
         }
     }

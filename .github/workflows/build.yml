@@ -14,6 +14,8 @@ jobs:
         run: xcodebuild -version
       - name: Calibration regression tests
         run: bash scripts/test-calibration.sh
+      - name: Compile isolated controller integration harness
+        run: bash scripts/build-controller-integration.sh
       - name: Build complete app
         run: >-
           xcodebuild -project 'Hidden Bar.xcodeproj' -scheme 'Hidden Bar'

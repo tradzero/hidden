@@ -26,14 +26,21 @@ final class MenuBarGeometryProbe: NSObject, NSApplicationDelegate {
         for title in decoy ? ["HB-A", "HB-B"] : ["HB-P", "|"] {
             let item = NSStatusBar.system.statusItem(withLength: decoy ? 44 : 36)
             item.button?.title = title
+            if decoy { item.button?.target = self; item.button?.action = #selector(decoyPressed(_:)) }
             // No autosave name: no permanent layout/preference changes.
             items.append(item)
         }
         if decoy {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 20) { NSApp.terminate(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + (CommandLine.arguments.contains("--hold") ? 180 : 20)) { NSApp.terminate(nil) }
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.probe() }
         }
+    }
+
+    @objc func decoyPressed(_ sender: NSStatusBarButton) {
+        sender.title = sender.title.hasSuffix("!") ? String(sender.title.dropLast()) : sender.title + "!"
+        print("DECOY_CLICK: \(sender.title)")
+        fflush(stdout)
     }
 
     func probe() {
