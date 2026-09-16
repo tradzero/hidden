@@ -23,3 +23,10 @@
 （再次右键单击 “>” 按钮恢复显示 “持续隐藏区域” 中的图标。）
 祝您使用愉快 😉!
 ";
+
+"Hiding unavailable in the current layout" = "当前布局暂时无法隐藏图标";
+
+"Show hidden icons" = "展开隐藏的图标";
+"Hide icons" = "收起图标";
+
+"Recalculate hiding layout" = "重新计算隐藏布局";

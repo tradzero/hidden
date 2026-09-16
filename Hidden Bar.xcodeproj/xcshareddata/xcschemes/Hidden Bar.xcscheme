@@ -15,7 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "929113F021F9D04100173149"
-               BuildableName = "Hidden Bar.app"
+               BuildableName = "Hidden Bar 27.app"
                BlueprintName = "Hidden Bar"
                ReferencedContainer = "container:Hidden Bar.xcodeproj">
             </BuildableReference>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "929113F021F9D04100173149"
-            BuildableName = "Hidden Bar.app"
+            BuildableName = "Hidden Bar 27.app"
             BlueprintName = "Hidden Bar"
             ReferencedContainer = "container:Hidden Bar.xcodeproj">
          </BuildableReference>
@@ -62,7 +62,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "929113F021F9D04100173149"
-            BuildableName = "Hidden Bar.app"
+            BuildableName = "Hidden Bar 27.app"
             BlueprintName = "Hidden Bar"
             ReferencedContainer = "container:Hidden Bar.xcodeproj">
          </BuildableReference>

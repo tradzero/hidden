@@ -7,6 +7,10 @@ helper app, no daemon, no network. Everything happens inside three
 
 ## The core trick
 
+The fixed-length rules below describe the legacy path (macOS 26 and earlier).
+This experimental fork uses measured lengths on macOS 27; see
+[MACOS27-VALIDATION.md](MACOS27-VALIDATION.md).
+
 macOS offers no API to hide other apps' menubar icons. Hidden Bar fakes it with
 geometry: a separator status item whose **length is inflated to roughly the
 width of the widest attached screen**, shoving every icon to its left off-screen.
@@ -97,9 +101,11 @@ A full-tree audit (2026-06) scored 9/10 with hygiene-level findings only.
 - **The notch**: hidden icons sit "under" the notch area on notched Macs; the
   trick cannot reveal them there. The real fix is a spillover/second-bar design
   (tracked in issues #357/#341/#148; candidate implementations in PRs #350/#358).
-- **macOS 27**: the menu bar re-architecture in macOS 27 betas
-  (`NSMenuBarNavigationSceneExtension`) breaks length-inflation hiding entirely
-  (issue #360). A different mechanism may be required.
+- **macOS 27 (experimental fork)**: oversized separators can leave the effective
+  layout. This branch uses cancellable, independently calibrated separator lengths
+  instead of the legacy fixed inflated length. Geometry acceptance is not proof
+  that every icon hides on every display. See [validation](MACOS27-VALIDATION.md)
+  for evidence, remaining E2E gaps and the compatibility boundary.
 - **Other apps' open menus**: interaction-awareness is pointer-position-based;
   a pointer deep inside another app's open dropdown is below the menubar band,
   so the collapse can still fire there.

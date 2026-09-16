@@ -23,7 +23,7 @@ deprecated `SMLoginItemSetEnabled(false)` call that cleans up legacy installs.
 The repo has no unit-test infrastructure; behavior is verified against the real
 menu bar. Two building blocks make that scriptable:
 
-1. **Truth signal**: the separator's AX size.
+1. **Geometry signal (not visibility proof on macOS 27)**: the separator's AX size.
    `osascript -e 'tell application "System Events" to tell process "Hidden Bar" to get size of menu bar item 2 of menu bar 2'`
    reads ~20pt expanded vs ~2x-screen-width collapsed. Item 1 is the arrow.
 2. **Real clicks, not AXPress**: `AXPress` on the arrow is a no-op because the
@@ -78,3 +78,8 @@ mechanism break, and pointer-vs-open-menu limits. Memory reports (#361 et al.)
 have so far not reproduced as leaks (constraint-leak fix landed; `leaks` clean
 over toggle stress); re-check with a 24h+ uptime `footprint` sample before
 chasing further.
+
+## macOS 27 experimental branch
+
+See [MACOS27-VALIDATION.md](MACOS27-VALIDATION.md) for the isolated test commands,
+Actions artifact, measured behavior and outstanding cross-process visual E2E.

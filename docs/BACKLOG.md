@@ -9,7 +9,14 @@ Source of the current state: the v1.11 issue-clearing pass (2026-06-12), branch
 `fix/v1-11-batch` / draft PR #365, and SPEC-003. Core-model changes (separator length
 math, collapse state machine) are HIGH RISK and require a mandatory review-team pass.
 
-## Blocked on macOS 27 hardware (Han UAT)
+## Experimental macOS 27 fork status
+
+This branch has a cancellable calibration implementation and targeted tests.
+The historical investigation below is retained for upstream context; current
+measurements and unverified scenarios are in [MACOS27-VALIDATION.md](MACOS27-VALIDATION.md).
+Core review and complete multi-display visual E2E remain open.
+
+## Historical macOS 27 investigation (Han UAT)
 
 - **macOS 27 hide-mechanism capture (#360).** Run the v1.11 build on real macOS 27,
   trigger a collapse, capture the `HideMechanism:` NSLog (requested length / host-window
