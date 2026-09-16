@@ -106,6 +106,8 @@ class StatusBarController {
     private var modernLayoutBusy = false
     private var modernLayoutFailed = false
     private var layoutGeneration = 0
+    private let readDisplayConfiguration: () -> String
+    private var cachedDisplayConfiguration: String?
     private var ordinaryCachedLength: CGFloat?
     private var alwaysCachedLength: CGFloat?
     private var ordinaryCalibration: CollapseLengthCalibrator?
@@ -138,7 +140,8 @@ class StatusBarController {
     }
     
     //MARK: - Methods
-    init() {
+    init(displayConfiguration: @escaping () -> String = StatusBarController.currentDisplayConfiguration) {
+        readDisplayConfiguration = displayConfiguration
         updateCollapsedLengths()
         setupUI()
         restoreRemovedStatusItems()
@@ -194,8 +197,7 @@ class StatusBarController {
     
     @objc private func handleScreenParametersChanged() {
         if usesCalibratedCollapse {
-            updateCollapsedLengths()
-            scheduleModernRecalibration()
+            refreshDisplayConfiguration()
             return
         }
         // Re-apply the recomputed length to the LIVE item when collapsed, or a
@@ -368,11 +370,35 @@ class StatusBarController {
         startTimerToAutoHide()
     }
 
+    private var displayConfiguration: String { readDisplayConfiguration() }
+
+    private static func currentDisplayConfiguration() -> String {
+        let screens = NSScreen.screens.map { screen -> String in
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            var signature = "\(id?.uint32Value ?? 0):\(NSStringFromRect(screen.frame)):\(screen.backingScaleFactor)"
+            if #available(macOS 12.0, *) {
+                let safe = screen.safeAreaInsets
+                signature += ":\(safe.top),\(safe.left),\(safe.bottom),\(safe.right)"
+            }
+            return signature
+        }.sorted().joined(separator: ";")
+        return screens + "|\(Constant.isUsingLTRLanguage)|\(NSScreen.screensHaveSeparateSpaces)"
+    }
+
     @objc private func modernEnvironmentChanged(_ notification: Notification) {
-        if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-           app.processIdentifier == ProcessInfo.processInfo.processIdentifier { return }
-        // A pinned separator edge does not prove that icons remain hidden:
-        // a shorter foreground menu can reveal icons without moving that edge.
+        // Activation/wake can reveal a changed display configuration, but an
+        // unchanged configuration must not write any status-item layout values.
+        refreshDisplayConfiguration()
+    }
+
+    private func refreshDisplayConfiguration() {
+        guard cachedDisplayConfiguration != displayConfiguration else { return }
+        updateCollapsedLengths()
+        scheduleModernRecalibration()
+    }
+
+    @objc func recalibrateMenuBar() {
+        updateCollapsedLengths()
         scheduleModernRecalibration()
     }
 
@@ -389,6 +415,7 @@ class StatusBarController {
         modernLayoutBusy = true
         ordinaryCachedLength = nil
         alwaysCachedLength = nil
+        cachedDisplayConfiguration = displayConfiguration
         let token = layoutGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self = self, self.layoutGeneration == token else { return }
@@ -451,8 +478,18 @@ class StatusBarController {
         modernLayoutBusy = true
         modernLayoutFailed = false
         let token = layoutGeneration
-        setSpacers(ordinarySpacers, length: nil)
-        btnSeparate.length = btnHiddenLength
+        let configuration = displayConfiguration
+        if cachedDisplayConfiguration != configuration {
+            ordinaryCachedLength = nil
+            alwaysCachedLength = nil
+            cachedDisplayConfiguration = configuration
+        }
+        let needsAlwaysCalibration = Preferences.alwaysHiddenSectionEnabled
+            && Preferences.areSeparatorsHidden && alwaysCachedLength == nil
+        if !collapsed || ordinaryCachedLength == nil || needsAlwaysCalibration {
+            setSpacers(ordinarySpacers, length: nil)
+            btnSeparate.length = btnHiddenLength
+        }
         updateModernAppearance()
 
         // Calibrate the always-hidden item independently with the ordinary section
@@ -474,13 +511,31 @@ class StatusBarController {
         }
     }
 
-    private func calibrateAlwaysHidden(_ item: NSStatusItem, token: Int) {
+    private var conservativeCollapseBound: CGFloat {
+        CollapseLengthCalibrator.conservativeUpperBound(screenWidths: NSScreen.screens.map { $0.frame.width })
+    }
+
+    private func calibrateAlwaysHidden(_ item: NSStatusItem, token: Int, retry: Bool = true) {
+        if let length = alwaysCachedLength {
+            item.length = length
+            setSpacers(alwaysSpacers, length: length)
+            applyModernOrdinarySection(token: token)
+            return
+        }
         setSpacers(alwaysSpacers, length: nil)
         let calibration = makeCalibration(for: item, anchor: btnSeparate)
         alwaysCalibration = calibration
-        calibration.start(expanded: btnAlwaysHiddenLength, upperBound: btnHiddenCollapseLength,
+        calibration.start(expanded: btnAlwaysHiddenLength, upperBound: conservativeCollapseBound,
                           cached: alwaysCachedLength) { [weak self] result in
             guard let self = self, self.layoutGeneration == token else { return }
+            if case .unsettled = result, retry {
+                item.length = self.btnAlwaysHiddenLength
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self = self, self.layoutGeneration == token else { return }
+                    self.calibrateAlwaysHidden(item, token: token, retry: false)
+                }
+                return
+            }
             if case .applied(let length) = result {
                 self.alwaysCachedLength = length
                 self.setSpacers(self.alwaysSpacers, length: length)
@@ -494,7 +549,7 @@ class StatusBarController {
         }
     }
 
-    private func applyModernOrdinarySection(token: Int) {
+    private func applyModernOrdinarySection(token: Int, retry: Bool = true) {
         guard layoutGeneration == token else { return }
         guard modernCollapsed else {
             modernLayoutBusy = false
@@ -502,11 +557,28 @@ class StatusBarController {
             autoCollapseIfNeeded()
             return
         }
+        if let length = ordinaryCachedLength {
+            updateModernAppearance()
+            btnSeparate.length = length
+            setSpacers(ordinarySpacers, length: length)
+            modernLayoutBusy = false
+            return
+        }
         let calibration = makeCalibration(for: btnSeparate, anchor: btnExpandCollapse)
         ordinaryCalibration = calibration
-        calibration.start(expanded: btnHiddenLength, upperBound: btnHiddenCollapseLength,
+        calibration.start(expanded: btnHiddenLength, upperBound: conservativeCollapseBound,
                           cached: ordinaryCachedLength) { [weak self] result in
             guard let self = self, self.layoutGeneration == token else { return }
+            // Display/layout animation may outlive the first settling samples.
+            // Retry once; cancellation still invalidates this delayed callback.
+            if case .unsettled = result, retry {
+                self.btnSeparate.length = self.btnHiddenLength
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self = self, self.layoutGeneration == token else { return }
+                    self.applyModernOrdinarySection(token: token, retry: false)
+                }
+                return
+            }
             self.modernLayoutBusy = false
             if case .applied(let length) = result {
                 self.ordinaryCachedLength = length
@@ -553,6 +625,9 @@ class StatusBarController {
         menu.addItem(toggleAutoHideItem)
 
         if usesCalibratedCollapse {
+            let recalibrate = NSMenuItem(title: "Recalculate hiding layout".localized, action: #selector(recalibrateMenuBar), keyEquivalent: "")
+            recalibrate.target = self
+            menu.addItem(recalibrate)
             let notice = NSMenuItem(title: "Hiding unavailable in the current layout".localized, action: nil, keyEquivalent: "")
             notice.tag = 27
             notice.isHidden = true

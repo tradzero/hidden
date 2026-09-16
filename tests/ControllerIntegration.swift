@@ -16,6 +16,7 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
     var separator: NSStatusItem!
     var arrow: NSStatusItem!
     var failures = 0
+    var displayKey = "display-a"
 
     static func main() {
         let app = NSApplication.shared
@@ -36,7 +37,7 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
             UserDefaults.Key.alwaysHiddenSectionEnabled: CommandLine.arguments.contains("--always-hidden"),
             UserDefaults.Key.areSeparatorsHidden: CommandLine.arguments.contains("--always-hidden")
         ])
-        controller = StatusBarController()
+        controller = StatusBarController(displayConfiguration: { [unowned self] in self.displayKey })
         for property in Mirror(reflecting: controller!).children {
             if property.label == "btnSeparate" { separator = property.value as? NSStatusItem }
             if property.label == "btnExpandCollapse", let item = property.value as? NSStatusItem {
@@ -53,6 +54,7 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
             self.check(self.separator.length == 20, "button activation without mouse-up expands")
             self.check(self.arrow.button?.toolTip == "Hide icons".localized, "expanded action description")
             self.later(0.5) {
+                self.displayKey = "display-b"
                 NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
                 self.later(0.5) {
                     self.controller.expandCollapseIfNeeded()
@@ -107,26 +109,44 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
         return items
     }
 
+    func generation() -> Int {
+        Mirror(reflecting: controller!).children.first { $0.label == "layoutGeneration" }!.value as! Int
+    }
+
     func checkApplicationActivation() {
-        let previous = Mirror(reflecting: controller!).children.first { $0.label == "ordinaryCalibration" }?.value as? CollapseLengthCalibrator
-        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
-        let cached = Mirror(reflecting: controller!).children.first { $0.label == "ordinaryCachedLength" }?.value as? CGFloat
-        check(cached == nil, "application activation discards the accepted old span")
-        later(0.5) { self.whenSettled {
-            let current = Mirror(reflecting: self.controller!).children.first { $0.label == "ordinaryCalibration" }?.value as? CollapseLengthCalibrator
-            self.check(current != nil && current !== previous, "application activation performs fresh calibration")
-            self.check(self.separator.length > 20 && self.separator.length < 1000, "application activation preserves collapsed intent")
+        let previous = generation()
+        let length = separator.length
+        for _ in 0..<5 {
             NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        }
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didWakeNotification, object: nil)
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        check(generation() == previous && separator.length == length, "same-display activation/wake/notification perform no layout writes")
+        later(0.5) {
+            self.check(self.generation() == previous && self.separator.length == length, "no delayed recalibration on cache hit")
             self.controller.expandCollapseIfNeeded()
-            self.later(0.5) { self.whenSettled {
-                self.check(self.separator.length == 20, "expand cancels application-change recalibration")
-                NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+            self.later(0.4) {
+                self.controller.expandCollapseIfNeeded()
+                self.check(self.separator.length == length, "cached recollapse applies immediately without probing")
+                self.displayKey = "display-c"
+                NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+                let cached = Mirror(reflecting: self.controller!).children.first { $0.label == "ordinaryCachedLength" }?.value as? CGFloat
+                self.check(cached == nil, "changed display configuration invalidates cache")
                 self.later(0.5) { self.whenSettled {
-                    self.check(self.separator.length == 20, "application activation preserves expanded intent")
-                    self.checkAlwaysSectionToggle()
+                    self.check(self.separator.length > 20, "changed configuration recalibrates collapsed layout")
+                    let beforeManual = self.generation()
+                    self.controller.recalibrateMenuBar()
+                    self.check(self.generation() > beforeManual, "manual recovery forces recalibration")
+                    self.controller.expandCollapseIfNeeded()
+                    self.later(0.5) { self.whenSettled {
+                        self.check(self.separator.length == 20, "expand cancels manual recalibration")
+                        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+                        self.check(self.separator.length == 20, "application activation preserves expanded intent")
+                        self.checkAlwaysSectionToggle()
+                    } }
                 } }
-            } }
-        } }
+            }
+        }
     }
 
     func checkAlwaysSectionToggle() {

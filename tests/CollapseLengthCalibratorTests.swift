@@ -82,6 +82,11 @@ enum CalibrationTests {
         changedContext.context = "display-b"; changedContext.drain()
         if case .unsettled = changedContext.outcome {} else { fatalError("mixed display samples accepted") }
 
-        print("PASS: 9 calibration tests (boundary, cache, stale cache, cancellation, restart, missing geometry, no fit, anchor change, context change)")
+        let bound = CollapseLengthCalibrator.conservativeUpperBound(screenWidths: [1920, 1920])
+        precondition(bound < 400 && bound > 1920 / 7)
+        precondition(CollapseLengthCalibrator.conservativeUpperBound(screenWidths: [3008, 1800]) == 450)
+        precondition(CollapseLengthCalibrator.conservativeUpperBound(screenWidths: []) == 300)
+
+        print("PASS: 12 calibration tests (boundary, cache, stale cache, cancellation, restart, missing geometry, no fit, anchor change, context change, conservative display bounds)")
     }
 }

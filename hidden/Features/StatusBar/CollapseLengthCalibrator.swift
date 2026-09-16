@@ -3,6 +3,14 @@ import Foundation
 /// Empirical macOS 27 layout probe, not an AppKit visibility guarantee.
 /// All callbacks run on the main queue. The scheduler is injectable for race tests.
 final class CollapseLengthCalibrator {
+    /// Empirical conservative ceiling for seven-item groups, in logical points.
+    /// Seek enough combined span rather than the current foreground menu's cliff.
+    static func conservativeUpperBound(screenWidths: [CGFloat]) -> CGFloat {
+        let widths = screenWidths.filter { $0.isFinite && $0 > 0 }
+        guard let narrowest = widths.min(), let widest = widths.max() else { return 300 }
+        return max(40, min(narrowest / 4, widest / 7 + 64))
+    }
+
     struct Geometry {
         let edge: CGFloat
         let anchor: CGFloat

@@ -12,16 +12,22 @@ are bounded, cancellable and discarded when a newer layout request supersedes
 them. A failed search restores the ordinary section to expanded and exposes a
 notice in the context menu. A subsequent user toggle can retry.
 
-Lengths are revalidated on reuse. Display changes, wake and frontmost application
-changes clear the cache. A pinned separator edge is not sufficient to reuse a
-span after the foreground menu changes. Each section now has six additional
-spacers, each using its separator's calibrated length. Their combined width pushes
-icons past short application menus without asking one item for an oversized span.
-Spacers are invisible and zero-length when their section is expanded/disabled.
-The always-hidden section has its own calibration and spacer group, retained
-when the ordinary section expands.
-Changing bar contents without an application/display event is rechecked on the
-next toggle; this patch does not continuously poll other applications.
+During a process lifetime, lengths are cached for the current display configuration
+(display IDs, logical frames, backing scale, safe-area insets, separate-Spaces
+setting and LTR/RTL). Unchanged application activation, wake or screen notifications
+perform no layout writes. A changed configuration invalidates both section caches;
+ordinary expand/collapse directly uses the cached value without probing again.
+The context menu offers **Recalculate hiding layout** for manual recovery after
+rearranging items or an unexpected layout problem. A process restart recalibrates;
+lengths are not persisted across OS/app updates.
+
+Each section has six additional spacers. Calibration seeks a conservative unit,
+with a ceiling of `min(narrowest logical width / 4, widest logical width / 7 + 64)`
+rather than the current foreground menu's maximum. This is an empirical heuristic,
+not an Apple API guarantee. The seven-unit span still needs validation on unusually
+disparate displays. An unsettled search retries once after 500ms, retaining the
+same cancellation token. Spacers are invisible and zero-length when their section
+is expanded/disabled. The always-hidden group remains active on ordinary expansion.
 
 The macOS 26-and-earlier length and screen-change paths are retained. No new
 Accessibility, Screen Recording, network or private-API dependency is added to
@@ -181,3 +187,30 @@ Final focused results: 9 calibrator unit tests, 13 ordinary-controller assertion
 and 19 always-hidden-controller assertions passed. Controller coverage includes
 fresh calibration after activation, cancellation, expanded intent, spacer cleanup,
 and preserving the always-hidden slots across disable/re-enable.
+
+
+## Display-cache and grouping follow-up (2026-09-16)
+
+The production autosave names remain `_wide_v1`; this update does not introduce
+another layout migration. Local Xcode builds and Actions now use the same fork
+bundle ID, `com.tradzero.hidden.macos27trial`. Updates should replace the app at
+its existing path instead of launching successively named trial directories.
+The upstream app retains its separate `com.dwarvesv.minimalbar` identity.
+
+Hidden/visible membership is positional, saved by macOS via the status items'
+autosave names; the app does not own an independent list of other apps' icons.
+Stable identifiers and in-place updates preserve that existing mechanism. No
+private host-layout preference keys or cross-app permissions are introduced.
+A system reset of those positions may still require manual regrouping.
+
+The integration harness injects a display-configuration key to test invalidation
+without changing the user's physical display settings. It verifies that repeated
+activation/wake and same-configuration screen events leave the layout generation
+and widths unchanged, cached collapse is synchronous, a changed configuration
+invalidates the cache, and manual recalibration is cancellable.
+
+Focused validation: 12 calibrator checks, 16 ordinary-controller assertions and
+22 always-hidden-controller assertions passed. Both sections selected 325pt on
+the two 1920pt displays. A transient unsettled ordinary recalibration occurred
+in an earlier run; the bounded retry was added and both final runs passed.
+Physical hot-plug and display-mode changes remain hardware acceptance items.
