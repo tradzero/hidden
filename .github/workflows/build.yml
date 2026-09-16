@@ -22,7 +22,7 @@ jobs:
           -configuration Debug -derivedDataPath build/DerivedData
           CODE_SIGNING_ALLOWED=NO PRODUCT_BUNDLE_IDENTIFIER=com.tradzero.hidden.macos27trial build
       - name: Package unsigned development app
-        run: ditto -c -k --keepParent 'build/DerivedData/Build/Products/Debug/Hidden Bar.app' build/Hidden-Bar-macOS27.zip
+        run: ditto -c -k --keepParent 'build/DerivedData/Build/Products/Debug/Hidden Bar 27.app' build/Hidden-Bar-macOS27.zip
       - uses: actions/upload-artifact@v4
         with:
           name: Hidden-Bar-macOS27-development

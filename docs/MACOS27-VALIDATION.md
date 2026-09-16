@@ -286,3 +286,13 @@ The controller harness additionally waits beyond the 300ms click debounce after
 fast cache hits, and asserts activation tests begin collapsed, avoiding vacuous
 cache passes. Physical display hot-plug, mixed scaling, RTL and notched hardware
 remain separate acceptance cases.
+
+
+## Fork display name
+
+The fork is named `Hidden Bar 27.app` / `Hidden Bar 27` to distinguish it from
+`/Applications/Hidden Bar.app`. Its bundle ID, executable name (`Hidden Bar`),
+Swift module (`Hidden_Bar`), and status-item autosave names remain unchanged.
+The installed fork is renamed in place within `build/menu-recalibration`;
+Actions packages the same suffixed app name. This is a presentation change,
+not another preferences/layout identity migration.
