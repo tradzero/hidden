@@ -7,12 +7,13 @@ final class Fixture {
     var length: CGFloat = 20
     var cutoff: CGFloat = 629
     var geometryAvailable = true
+    var ejectedOffset: CGFloat?
     var context = "display-a"
     var anchor: CGFloat = 1200
     var outcome: CollapseLengthCalibrator.Outcome?
     lazy var calibrator = CollapseLengthCalibrator(read: { [unowned self] in
         guard self.geometryAvailable else { return nil }
-        let offset: CGFloat = self.length <= self.cutoff ? -8 : self.length
+        let offset: CGFloat = self.length <= self.cutoff ? -8 : (self.ejectedOffset ?? self.length)
         return .init(edge: self.anchor + offset, anchor: self.anchor, context: self.context)
     }, write: { [unowned self] value in
         self.length = value
@@ -47,6 +48,12 @@ enum CalibrationTests {
         staleCache.cutoff = 310
         staleCache.start(cached: 600); staleCache.drain()
         precondition(staleCache.applied != nil && staleCache.applied! <= 310)
+
+        // An ejected item need not jump by its full width (PR EricZhou866/hidden#1).
+        let smallEjection = Fixture()
+        smallEjection.ejectedOffset = 10 // 18pt away from the resting offset.
+        smallEjection.start(cached: 700); smallEjection.drain()
+        precondition(smallEjection.applied != nil && smallEjection.applied! <= smallEjection.cutoff)
 
         let cancelled = Fixture()
         cancelled.start(); cancelled.tick(); cancelled.tick()
@@ -83,10 +90,10 @@ enum CalibrationTests {
         if case .unsettled = changedContext.outcome {} else { fatalError("mixed display samples accepted") }
 
         let bound = CollapseLengthCalibrator.conservativeUpperBound(screenWidths: [1920, 1920])
-        precondition(bound < 400 && bound > 1920 / 7)
+        precondition(bound == 480)
         precondition(CollapseLengthCalibrator.conservativeUpperBound(screenWidths: [3008, 1800]) == 450)
         precondition(CollapseLengthCalibrator.conservativeUpperBound(screenWidths: []) == 300)
 
-        print("PASS: 12 calibration tests (boundary, cache, stale cache, cancellation, restart, missing geometry, no fit, anchor change, context change, conservative display bounds)")
+        print("PASS: 13 calibration tests (boundary, cache, stale cache, cancellation, restart, missing geometry, no fit, anchor change, context change, conservative display bounds)")
     }
 }

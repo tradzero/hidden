@@ -46,9 +46,12 @@ class StatusBarController {
 
     private func setSpacers(_ spacers: [NSStatusItem], length: CGFloat?) {
         for item in spacers {
-            // Hide first when expanding; zero length alone can leave inter-item gaps.
-            if length == nil { item.isVisible = false }
-            if length != nil { item.isVisible = true }
+            // macOS 27 reinserts hidden items to the left of the separator.
+            // Keep active slots registered on expansion, accepting small host gaps.
+            // Otherwise the invisible spacer group moves across the user's icons.
+            let ordinarySection = spacers.first === ordinarySpacers.first
+            let keepVisible = length != nil || ordinarySection || Preferences.alwaysHiddenSectionEnabled
+            if item.isVisible != keepVisible { item.isVisible = keepVisible }
             item.length = length ?? 0
         }
     }
@@ -103,6 +106,7 @@ class StatusBarController {
     }
     // User intent is independent of the temporary lengths used by a probe.
     private var modernCollapsed = false
+    private var arrangingGroup = false
     private var modernLayoutBusy = false
     private var modernLayoutFailed = false
     private var layoutGeneration = 0
@@ -152,8 +156,17 @@ class StatusBarController {
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(modernEnvironmentChanged(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(modernEnvironmentChanged(_:)), name: NSWorkspace.didWakeNotification, object: nil)
         }
+        let arrangeGroup = usesCalibratedCollapse && UserDefaults.standard.bool(forKey: "HiddenBarArrangeGroup")
+        arrangingGroup = arrangeGroup
+        if arrangeGroup {
+            for (index, item) in ordinarySpacers.enumerated() { item.button?.title = "\(index + 1)" }
+        }
+        if usesCalibratedCollapse && (arrangeGroup || UserDefaults.standard.bool(forKey: "HiddenBarLayoutDiagnostics")) {
+            setSpacers(ordinarySpacers, length: 20)
+            logModernLayout("startup-compact-group-written")
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.collapseMenuBar()
+            if !arrangeGroup { self?.collapseMenuBar() }
         }
         
         if Preferences.areSeparatorsHidden {hideSeparators()}
@@ -316,6 +329,7 @@ class StatusBarController {
         //prevented rapid click cause icon show many in Dock
         if isToggle {return}
         isToggle = true
+        arrangingGroup = false
         self.isCollapsed ? self.expandMenubar() : self.collapseMenuBar()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.isToggle = false
@@ -363,6 +377,7 @@ class StatusBarController {
     }
     
     private func autoCollapseIfNeeded() {
+        guard !arrangingGroup else { return }
         if usesCalibratedCollapse && (modernLayoutBusy || modernLayoutFailed) { return }
         guard Preferences.isAutoHide else {return}
         guard !isCollapsed else { return }
@@ -389,9 +404,11 @@ class StatusBarController {
         // Activation/wake can reveal a changed display configuration, but an
         // unchanged configuration must not write any status-item layout values.
         refreshDisplayConfiguration()
+        logModernLayout("environment-read-only")
     }
 
     private func refreshDisplayConfiguration() {
+        guard !arrangingGroup else { return }
         guard cachedDisplayConfiguration != displayConfiguration else { return }
         updateCollapsedLengths()
         scheduleModernRecalibration()
@@ -435,6 +452,23 @@ class StatusBarController {
                                                 context: context)
     }
 
+    // Opt-in local diagnostics only. Reads without a length write may be stale;
+    // these snapshots describe our items, never certify other apps are hidden.
+    private func logModernLayout(_ reason: String) {
+        guard UserDefaults.standard.bool(forKey: "HiddenBarLayoutDiagnostics") else { return }
+        let token = layoutGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self = self, self.layoutGeneration == token else { return }
+            let items = [self.btnExpandCollapse] + self.ordinarySpacers + [self.btnSeparate]
+                + self.alwaysSpacers + (self.btnAlwaysHidden.map { [$0] } ?? [])
+            for item in items {
+                guard let button = item.button, let window = button.window else { continue }
+                let frame = window.convertToScreen(button.convert(button.bounds, to: nil))
+                NSLog("CollapseLayout: reason=\(reason) name=\(item.autosaveName ?? "none") requested=\(item.length) visible=\(item.isVisible) button=\(NSStringFromRect(frame)) window=\(NSStringFromRect(window.frame))")
+            }
+        }
+    }
+
     private func makeCalibration(for item: NSStatusItem, anchor: NSStatusItem) -> CollapseLengthCalibrator {
         CollapseLengthCalibrator(read: { [weak self, weak item, weak anchor] in
             guard let self = self, let item = item, let anchor = anchor else { return nil }
@@ -472,6 +506,9 @@ class StatusBarController {
     }
 
     private func applyModernLayout(collapsed: Bool) {
+        guard !arrangingGroup else { return }
+        // Temporary opt-in arrangement labels must be removed before measuring.
+        for item in ordinarySpacers where item.button?.title.isEmpty == false { item.button?.title = "" }
         cancelModernCalibration()
         timer?.invalidate()
         modernCollapsed = collapsed
@@ -526,7 +563,7 @@ class StatusBarController {
         let calibration = makeCalibration(for: item, anchor: btnSeparate)
         alwaysCalibration = calibration
         calibration.start(expanded: btnAlwaysHiddenLength, upperBound: conservativeCollapseBound,
-                          cached: alwaysCachedLength) { [weak self] result in
+                          cached: conservativeCollapseBound) { [weak self] result in
             guard let self = self, self.layoutGeneration == token else { return }
             if case .unsettled = result, retry {
                 item.length = self.btnAlwaysHiddenLength
@@ -561,13 +598,14 @@ class StatusBarController {
             updateModernAppearance()
             btnSeparate.length = length
             setSpacers(ordinarySpacers, length: length)
+            logModernLayout("cached-group-written")
             modernLayoutBusy = false
             return
         }
         let calibration = makeCalibration(for: btnSeparate, anchor: btnExpandCollapse)
         ordinaryCalibration = calibration
         calibration.start(expanded: btnHiddenLength, upperBound: conservativeCollapseBound,
-                          cached: ordinaryCachedLength) { [weak self] result in
+                          cached: conservativeCollapseBound) { [weak self] result in
             guard let self = self, self.layoutGeneration == token else { return }
             // Display/layout animation may outlive the first settling samples.
             // Retry once; cancellation still invalidates this delayed callback.
@@ -583,6 +621,7 @@ class StatusBarController {
             if case .applied(let length) = result {
                 self.ordinaryCachedLength = length
                 self.setSpacers(self.ordinarySpacers, length: length)
+                self.logModernLayout("calibrated-group-written")
                 NSLog("CollapseCalibration: ordinary applied \(length)pt")
             } else {
                 self.ordinaryCachedLength = nil

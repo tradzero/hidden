@@ -37,6 +37,9 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
             UserDefaults.Key.alwaysHiddenSectionEnabled: CommandLine.arguments.contains("--always-hidden"),
             UserDefaults.Key.areSeparatorsHidden: CommandLine.arguments.contains("--always-hidden")
         ])
+        if CommandLine.arguments.contains("--arrange") {
+            UserDefaults.standard.register(defaults: ["HiddenBarArrangeGroup": true])
+        }
         controller = StatusBarController(displayConfiguration: { [unowned self] in self.displayKey })
         for property in Mirror(reflecting: controller!).children {
             if property.label == "btnSeparate" { separator = property.value as? NSStatusItem }
@@ -44,6 +47,24 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
                 arrow = item
                 item.button?.title = "HB-T"
             }
+        }
+        if CommandLine.arguments.contains("--arrange") {
+            later(1.5) {
+                self.check(self.spacers("ordinarySpacers").allSatisfy { !($0.button?.title.isEmpty ?? true) }, "arrangement labels persist after startup")
+                NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+                self.displayKey = "display-b"
+                NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+                self.later(0.8) {
+                    self.check(self.spacers("ordinarySpacers").allSatisfy { !($0.button?.title.isEmpty ?? true) }, "activation and display notifications preserve arrangement")
+                    self.arrow.button?.performClick(nil)
+                    self.whenSettled {
+                        self.check(self.spacers("ordinarySpacers").allSatisfy { $0.button?.title.isEmpty == true }, "explicit toggle clears arrangement labels")
+                        self.check(self.separator.length > 20, "explicit toggle completes arrangement and collapses")
+                        self.complete()
+                    }
+                }
+            }
+            return
         }
         // Calibration settles asynchronously, especially with two separators.
         // Wait for completion with a deadline instead of sampling an in-flight probe.
@@ -65,8 +86,11 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
                             self.controller.expandCollapseIfNeeded()
                             self.whenSettled {
                                 self.check(self.separator.length > 20 && self.separator.length < 1000, "recollapse succeeds")
-                                self.controller.expandCollapseIfNeeded()
-                                self.whenSettled { self.finish() }
+                                // Cached collapse can complete inside the click debounce window.
+                                self.later(0.4) {
+                                    self.controller.expandCollapseIfNeeded()
+                                    self.whenSettled { self.finish() }
+                                }
                             }
                         }
                     }
@@ -91,7 +115,7 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
 
     func finish() {
         check(separator.length == 20, "final expand")
-        check(spacers("ordinarySpacers").allSatisfy { !$0.isVisible && $0.length == 0 }, "ordinary spacers take no space on expand")
+        check(spacers("ordinarySpacers").allSatisfy { $0.isVisible && $0.length == 0 }, "ordinary zero-width slots remain registered on expand")
         if CommandLine.arguments.contains("--always-hidden") {
             let property = Mirror(reflecting: controller!).children.first { $0.label == "btnAlwaysHidden" }
             let item = property?.value as? NSStatusItem
@@ -116,6 +140,7 @@ final class ControllerIntegration: NSObject, NSApplicationDelegate {
     func checkApplicationActivation() {
         let previous = generation()
         let length = separator.length
+        check(length > 20, "activation checks begin collapsed")
         for _ in 0..<5 {
             NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
         }

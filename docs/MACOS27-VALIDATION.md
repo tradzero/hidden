@@ -22,8 +22,9 @@ rearranging items or an unexpected layout problem. A process restart recalibrate
 lengths are not persisted across OS/app updates.
 
 Each section has six additional spacers. Calibration seeks a conservative unit,
-with a ceiling of `min(narrowest logical width / 4, widest logical width / 7 + 64)`
-rather than the current foreground menu's maximum. This is an empirical heuristic,
+with a ceiling of `narrowest logical width / 4`
+rather than the current foreground menu's maximum. This candidate is probed first;
+if rejected, the bounded search finds a smaller accepted length. This is an empirical heuristic,
 not an Apple API guarantee. The seven-unit span still needs validation on unusually
 disparate displays. An unsettled search retries once after 500ms, retaining the
 same cancellation token. Spacers are invisible and zero-length when their section
@@ -68,7 +69,7 @@ icons to the right of the arrow. If using always-hidden, place those icons to
 the left of the additional separator. Do not drag icons between a separator and
 its arrow; that space belongs to the hidden spacers. This grouping is a one-time
 setup and is retained on subsequent launches. The system double-chevron is
-unchanged. Unused spacer items have no glyph and take no space on expansion.
+unchanged. Active spacer items have no glyph and request zero width on expansion; macOS may retain small gaps between their slots.
 
 ## Validation on 2026-09-15
 
@@ -214,3 +215,74 @@ Focused validation: 12 calibrator checks, 16 ordinary-controller assertions and
 the two 1920pt displays. A transient unsettled ordinary recalibration occurred
 in an earlier run; the bounded retry was added and both final runs passed.
 Physical hot-plug and display-mode changes remain hardware acceptance items.
+
+The initial 325pt profile passed controller checks but the user reported residual
+icons in Telegram. It was rejected as a release candidate: summed item widths
+alone do not prove real hiding. Restoring the original linker identifier did not
+resolve that symptom. The revised candidate is one quarter of the narrowest
+logical screen width (480pt here), close to the prior visually accepted 481pt.
+Local executable staging must retain the basename `Hidden Bar`; compiling to
+`cache-Hidden-Bar` changed the ad-hoc linker identifier even with an unchanged
+bundle ID. The CI executable already uses `Hidden Bar`.
+
+
+## Slot-order repair and acceptance (2026-09-16)
+
+The 480pt cache profile alone left two icons visible, and reducing the edge
+probe tolerance from 24pt to 8pt did not resolve existing grouping. The stricter
+classifier is retained: a new 18pt-ejection regression fails with the old
+24pt tolerance and passes with 8pt. This remains an empirical layout signal,
+not proof that another app's icon is hidden.
+
+The actual grouping defect was `isVisible=false` on expansion. In an isolated
+native experiment, eight 20pt items started in order (right control, six spacers,
+left separator). Hiding/re-showing the six spacers moved the separator from
+x=508 to x=670, next to the right control at x=697, with the spacers reinserted
+on its left. This occurred without user dragging. Repeating the experiment with
+zero widths and retained visibility preserved every position. The user confirms
+having moved application icons, not the separator.
+
+Active spacer slots now remain visible and request zero width on expansion.
+The host can retain small inter-item gaps. Only the disabled always-hidden
+section is removed; ordinary expansion no longer removes/reinserts its slots.
+Application activation still performs no layout writes for the same display
+configuration. Existing bundle ID, executable basename, path and `_wide_v1`
+autosave names are unchanged.
+
+Diagnostics (`-HiddenBarLayoutDiagnostics YES`) log only our own item frames and
+briefly show compact slots on startup. Reads can be stale, and overlapping or
+offscreen frames must not be interpreted as proof of hiding. The installed
+trial's compact group had a 244pt gap between its spacers and separator,
+consistent with application icons being inside the disrupted group.
+
+For the already disrupted layout, the temporary launch option
+`-HiddenBarArrangeGroup YES -isAutoHide NO` labels the six existing slots 1–6.
+The user Cmd-dragged these labels between the separator and arrow, leaving app
+icons in place, then clicked the arrow. Arrangement state survives activation
+and screen notifications and clears the labels only on an explicit toggle.
+Normal launches omit these temporary options.
+
+**User acceptance:** after the slot correction, all icons hid. After a normal
+restart with arrangement/diagnostic/auto-hide overrides removed, the user
+confirmed the grouping survived and Telegram, ChatGPT and Chrome hid correctly
+without flickering on application switches. This verifies the current machine
+and configuration, not arbitrary hardware or all future menu-bar changes.
+
+Validation:
+
+- 13 deterministic calibration checks, including the 18pt ejection regression.
+- 17 ordinary-controller and 23 always-hidden-controller assertions.
+- Four arrangement lifecycle assertions (startup, activation/display changes,
+  label cleanup and explicit collapse).
+- Real native zero-width slot-order regression
+  (`tests/SpacerOrderIntegration.swift`); `--legacy-hide` reproduces the old
+  remove/reinsert operation. Run with other Hidden Bar instances stopped;
+  overflow makes this test explicitly inconclusive.
+- Full local Swift compilation against SDK 27, locked HotKey revision and the
+  existing compiled storyboards/resources. Local signature identifier remains
+  `Hidden Bar`; bundle ID remains `com.tradzero.hidden.macos27trial`.
+
+The controller harness additionally waits beyond the 300ms click debounce after
+fast cache hits, and asserts activation tests begin collapsed, avoiding vacuous
+cache passes. Physical display hot-plug, mixed scaling, RTL and notched hardware
+remain separate acceptance cases.

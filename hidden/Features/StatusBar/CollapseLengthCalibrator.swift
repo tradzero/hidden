@@ -7,8 +7,8 @@ final class CollapseLengthCalibrator {
     /// Seek enough combined span rather than the current foreground menu's cliff.
     static func conservativeUpperBound(screenWidths: [CGFloat]) -> CGFloat {
         let widths = screenWidths.filter { $0.isFinite && $0 > 0 }
-        guard let narrowest = widths.min(), let widest = widths.max() else { return 300 }
-        return max(40, min(narrowest / 4, widest / 7 + 64))
+        guard let narrowest = widths.min() else { return 300 }
+        return max(40, narrowest / 4)
     }
 
     struct Geometry {
@@ -112,8 +112,8 @@ final class CollapseLengthCalibrator {
                 return
             }
             // The arrow-facing edge stays pinned while the separator occupies space.
-            // This tolerance accommodates measured status-window padding, not an API limit.
-            result(abs(geometry.offset - baseline.offset) <= 24)
+            // A small displacement can already mean ejection; this is empirical, not an API limit.
+            result(abs(geometry.offset - baseline.offset) <= 8)
         }
     }
 
